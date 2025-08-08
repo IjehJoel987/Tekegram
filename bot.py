@@ -344,7 +344,7 @@ def main():
     application.add_handler(CommandHandler('help', admin_help))
 
     # Start a simple web server for Render (so it doesn't think the service crashed)
-    port = int(os.getenv("PORT", 10000))
+    port = 10000
     
     def start_web_server():
         handler = http.server.SimpleHTTPRequestHandler
@@ -363,3 +363,4 @@ def main():
 if __name__ == '__main__':
 
     main()
+
