@@ -9,6 +9,10 @@ Install: pip install python-telegram-bot
 import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import threading
+import http.server
+import socketserver
+
 
 # Enable basic logging (errors only)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
@@ -338,10 +342,24 @@ def main():
     # Add handlers
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('help', admin_help))
+
+    # Start a simple web server for Render (so it doesn't think the service crashed)
+    port = int(os.getenv("PORT", 10000))
+    
+    def start_web_server():
+        handler = http.server.SimpleHTTPRequestHandler
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            print(f"🌐 Web server running on port {port}")
+            httpd.serve_forever()
+    
+    # Start web server in background thread
+    web_thread = threading.Thread(target=start_web_server, daemon=True)
+    web_thread.start()
     
     # Start the bot
     print("🚀 Bot is running...")
     application.run_polling()
 
 if __name__ == '__main__':
+
     main()
