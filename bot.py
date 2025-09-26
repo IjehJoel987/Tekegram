@@ -59,6 +59,9 @@ class UserProfile:
     name: str = ""
     phone: str = ""
     email: str = ""
+    department: str = ""  # Add this
+    room: str = ""        # Add this
+    room_number: str = "" # Add this
     requests: int = 0
     last_order: str = "None"
     preferred_tech: str = ""
@@ -109,6 +112,8 @@ issues: Dict[str, Issue] = {}
 callbacks: Dict[str, CallbackReq] = {}
 inquiries: Dict[str, Inquiry] = {}
 user_states: Dict[int, Dict[str, Any]] = {}
+inquiry_responses: Dict[str, str] = {}  # Store predefined responses
+tips_guides: Dict[str, str] = {}  # Store custom tips and guides
 
 def save_all():
     try:
@@ -123,11 +128,14 @@ def save_all():
             "admin_ids": list(ADMIN_IDS),
             "technicians": TECHNICIANS,
             "payment_info": PAYMENT_INFO,
+            "inquiry_responses": inquiry_responses,
+            "tips_guides": tips_guides,
         }
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.exception("Failed saving data: %s", e)
+
 
 def load_all():
     global ITEM_PRICES
@@ -159,6 +167,12 @@ def load_all():
         if "payment_info" in data:
             global PAYMENT_INFO
             PAYMENT_INFO = data["payment_info"]
+        if "inquiry_responses" in data:
+            global inquiry_responses
+            inquiry_responses = data["inquiry_responses"]
+        if "tips_guides" in data:
+            global tips_guides
+            tips_guides = data["tips_guides"]
     except Exception as e:
         logger.exception("Failed loading data: %s", e)
 
@@ -168,7 +182,6 @@ MAIN_BTNS = [
     [KeyboardButton("🛠 Report an Issue"), KeyboardButton("🚚 Track Request")],
     [KeyboardButton("💰 Price List"), KeyboardButton("📘 Tips & Guides")],
     [KeyboardButton("🧑‍🔧 Find a Technician"), KeyboardButton("👤 My Profile")],
-    [KeyboardButton("📞 Request Callback"), KeyboardButton("⚙️ Settings")],
 ]
 MAIN_KB = ReplyKeyboardMarkup(MAIN_BTNS, resize_keyboard=True)
 
@@ -211,13 +224,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data_store.setdefault(uid, UserProfile())
     welcome = (
         "👋 Welcome to PC DOCTOR — Powered by OBLAK Tech!\n\n"
-        "🔧 *Where Logic Meets Precision.*\n\n"
+        "🔧 Where Logic Meets Precision.\n\n"
         "We're here to help you troubleshoot your computer,\n"
         "• 🔍 Identify possible issues,\n"
         "• 👨‍🔧 Connect you with our trained technicians, and\n"
-        "• 💰 Estimate repair costs — all in one place.\n\n"
+        "• 💰We provide detailed repair cost estimates\n"
+        ". Sell PC related accessories\n"
+        "> We deliver our services at your convenience, right to your doorstep — all in one place.\n\n"
         "Just tell us what's wrong, and we'll take it from there!\n\n"
-        
     )
     await update.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
 
@@ -306,6 +320,10 @@ async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_admin_price_input(update, context, state)
     elif action == "manage_technicians":
         await handle_technician_input(update, context, state)
+    elif action == "manage_inquiry":
+        await handle_manage_inquiry_input(update, context, state)
+    elif action == "manage_tips":
+        await handle_manage_tips_input(update, context, state)
     else:
         await update.message.reply_text("🤷🏽‍♂️ Not sure what we were doing. Starting fresh.", reply_markup=MAIN_KB)
         user_states.pop(uid, None)
@@ -337,6 +355,7 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         kb.append([InlineKeyboardButton(f"{emoji} {display_name}", callback_data=f"purchase_{item_key}")])
     
+    kb.append([InlineKeyboardButton("❓ Other Item", callback_data="purchase_other")])  # ADD THIS LINE
     kb.append([InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")])
     
     await update.message.reply_text("🛒 *Purchase Components*\n\nPick a category:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
@@ -351,10 +370,10 @@ async def handle_purchase_item(query, item: str):
         price_text = f"💰 *{item.replace('_', ' ').title()} Prices*\n\n"
         for model, price in ITEM_PRICES[item].items():
             price_text += f"• {model}: {fmt_money(price)}\n"
-        price_text += "\n📱 Which laptop model do you have?"
+        price_text += "\n📱 Which model do you want?"
     else:
-        price_text = f"💰 *{item.replace('_', ' ').title()}*\n\n📱 Which laptop model do you have?"
-    
+        price_text = f"💰 *{item.replace('_', ' ').title()}*\n\n📱 Which model do you want?"
+
     await query.edit_message_text(price_text, parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
 
 async def handle_purchase_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
@@ -369,6 +388,15 @@ async def handle_purchase_input(update: Update, context: ContextTypes.DEFAULT_TY
 
     o = orders[state["order_id"]]
     step = state.get("step", "model")
+
+    if step == "custom_item":
+        o.details["custom_item"] = text
+        o.details["model"] = "Custom request"
+        o.details["unit_price"] = 0  # Price will be determined by admin
+        state["step"] = "quantity"
+        await update.message.reply_text("📦 How many units you need? (number)")
+        save_all()
+        return
 
     if step == "model":
         o.details["model"] = text
@@ -411,10 +439,14 @@ async def handle_purchase_input(update: Update, context: ContextTypes.DEFAULT_TY
         total = unit * qty
         o.details["total"] = total
         save_all()
+        user_profile = user_data_store.get(uid, UserProfile())
+        profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
+        
+        await notify_admin(context, f"🛒 NEW ORDER\n\nOrder ID: {state['order_id']}\nItem: {o.details.get('custom_item', state['item']).replace('_', ' ').title()}\nModel: {o.details['model']}\nQuantity: {qty}\nTotal: {fmt_money(total)}\nAddress: {o.details['address']}\n⏰ Time of Order: {o.timestamp}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
 
         confirm = (
             f"✅ **Order Summary**\n\n"
-            f"🛒 Item: {state['item'].replace('_', ' ').title()}\n"
+            f"🛒 Item: {o.details.get('custom_item', state['item']).replace('_', ' ').title()}\n"
             f"📱 Model: {o.details['model']}\n"
             f"📦 Quantity: {qty}\n"
             f"💰 Total: {fmt_money(total)}\n"
@@ -501,8 +533,11 @@ async def handle_issue_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
             else:
                 user_info += " | No contact info"
 
-            await notify_admin(context, f"🔧 NEW ISSUE\n\nID: {state['issue_id']}\nUser: {user_info}\nType: {issue.type}\nModel: {issue.details.get('model')}\nDesc: {issue.details.get('description')}")
+            # Send admin notification with profile info
+            user_profile = user_data_store.get(uid, UserProfile())
+            profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
 
+            await notify_admin(context, f"🔧 NEW ISSUE REPORT\n\nIssue ID: {state['issue_id']}\nType: {issue.type.title()}\nModel: {issue.details.get('model', 'N/A')}\nDescription: {issue.details.get('description', 'N/A')}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
 
             # Send photos to admin if any were uploaded
             photos = issue.details.get("photos", [])
@@ -529,7 +564,7 @@ async def handle_issue_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def handle_track_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user_states[uid] = {"action": "track_request"}
-    await update.message.reply_text("🚚 *Track Your Request*\n\nEnter your Request ID.\n\n📝 Examples:\n• Orders: ORD1234\n• Issues: ISS5678\n• Callbacks: CB9012\n• Inquiries: INQ3456", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🚚 *Track Your Request*\n\nEnter your Request ID.\n\n📝 Examples:\n• Orders: ORD1234\n• Issues: ISS5678\n• Callbacks: CB9012\n• Inquiries: INQ3456\n\n📧 For support issues, contact us at: oblaktech25@gmail.com", parse_mode=ParseMode.MARKDOWN)
 
 async def handle_track_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
     uid = update.effective_user.id
@@ -556,8 +591,25 @@ async def handle_track_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 # Simplified other handlers
 async def handle_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("💻 Laptop not booting", callback_data="inquiry_boot")], [InlineKeyboardButton("🖥 Display problem", callback_data="inquiry_display")], [InlineKeyboardButton("🔋 Charging issues", callback_data="inquiry_charging")], [InlineKeyboardButton("⚡ Performance/Speed", callback_data="inquiry_performance")], [InlineKeyboardButton("❓ Other", callback_data="inquiry_other")], [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")]]
+    kb = []
+    
+    # Add saved responses as buttons
+    for title in inquiry_responses.keys():
+        display_title = title.replace('_', ' ').title()
+        kb.append([InlineKeyboardButton(f"💡 {display_title}", callback_data=f"inquiry_saved_{title}")])
+    
+    # Add default options
+    kb.extend([
+        [InlineKeyboardButton("💻 Laptop not booting", callback_data="inquiry_boot")],
+        [InlineKeyboardButton("🖥 Display problem", callback_data="inquiry_display")],
+        [InlineKeyboardButton("🔋 Charging issues", callback_data="inquiry_charging")],
+        [InlineKeyboardButton("⚡ Performance/Speed", callback_data="inquiry_performance")],
+        [InlineKeyboardButton("❓ Other", callback_data="inquiry_other")],
+        [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")]
+    ])
+    
     await update.message.reply_text("❓ *Technical Inquiry*\n\nWhat's going on with your laptop?", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def handle_inquiry_other_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -575,7 +627,11 @@ async def handle_inquiry_other_input(update: Update, context: ContextTypes.DEFAU
     else:
         user_info += " | No contact info"
 
-    await notify_admin(context, f"📝 NEW INQUIRY\n\nID: {inquiry_id}\nUser: {user_info}\nQuestion: {text}")
+    # Send admin notification with profile info
+    user_profile = user_data_store.get(uid, UserProfile())
+    profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
+
+    await notify_admin(context, f"📝 NEW INQUIRY\n\nInquiry ID: {inquiry_id}\nQuestion: {text}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
 
     bump_user_req(uid, inquiry_id)
     user_states.pop(uid, None)
@@ -588,7 +644,7 @@ async def handle_my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = "👤 *My Profile*\n\n🆕 Looks like this is your first visit!\n\nSetting up your profile helps us provide better support. Takes 1 minute! 🚀"
         kb = [[InlineKeyboardButton("✅ Set Up Profile", callback_data="setup_profile")], [InlineKeyboardButton("⭐ Maybe Later", callback_data="main_menu")]]
     else:
-        txt = f"👤 *My Profile*\n\n📛 Name: {p.name or '❌ Not set'}\n📞 Phone: {p.phone or '❌ Not set'}\n📧 Email: {p.email or '❌ Not set'}\n📊 Total Requests: {p.requests}\n📦 Last Request: {p.last_order}"
+        txt = f"👤 *My Profile*\n\n📛 Name: {p.name or '❌ Not set'}\n📞 Phone: {p.phone or '❌ Not set'}\n📧 Email: {p.email or '❌ Not set'}\n🏢 Department: {p.department or '❌ Not set'}\n🚪 Room: {p.room or '❌ Not set'}\n🔢 Room Number: {p.room_number or '❌ Not set'}\n📊 Total Requests: {p.requests}\n📦 Last Request: {p.last_order}"
         kb = [[InlineKeyboardButton("✏️ Update Profile", callback_data="setup_profile")], [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")]]
     await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -618,9 +674,24 @@ async def handle_update_profile_input(update: Update, context: ContextTypes.DEFA
                 await update.message.reply_text("❌ Invalid email format. Try again or type `skip`.")
                 return
             profile.email = text
+        state["step"] = "department"
+        save_all()
+        await update.message.reply_text("🏢 Enter your department (or type `skip`):")
+    elif step == "department":
+        if text.lower() != "skip": profile.department = text
+        state["step"] = "room"
+        save_all()
+        await update.message.reply_text("🚪 Enter your room/block (or type `skip`):")
+    elif step == "room":
+        if text.lower() != "skip": profile.room = text
+        state["step"] = "room_number"
+        save_all()
+        await update.message.reply_text("🔢 Enter your room number (or type `skip`):")
+    elif step == "room_number":
+        if text.lower() != "skip": profile.room_number = text
         user_states.pop(uid, None)
         save_all()
-        await update.message.reply_text(f"✅ *Profile Updated!*\n\n📛 Name: {profile.name or 'Not set'}\n📱 Phone: {profile.phone or 'Not set'}\n📧 Email: {profile.email or 'Not set'}", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
+        await update.message.reply_text(f"✅ *Profile Updated!*\n\n📛 Name: {profile.name or 'Not set'}\n📱 Phone: {profile.phone or 'Not set'}\n📧 Email: {profile.email or 'Not set'}\n🏢 Department: {profile.department or 'Not set'}\n🚪 Room: {profile.room or 'Not set'}\n🔢 Room Number: {profile.room_number or 'Not set'}", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -673,8 +744,23 @@ async def handle_price_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_tips_guides(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🔋 Maintain battery", callback_data="tip_battery")], [InlineKeyboardButton("⚠️ Hardware failure signs", callback_data="tip_hardware")], [InlineKeyboardButton("🧽 Clean your laptop", callback_data="tip_cleaning")], [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")]]
+    kb = []
+    
+    # Add custom tips first
+    for title in tips_guides.keys():
+        display_title = title.replace('_', ' ').title()
+        kb.append([InlineKeyboardButton(f"💡 {display_title}", callback_data=f"tip_saved_{title}")])
+    
+    # Add default tips
+    kb.extend([
+        [InlineKeyboardButton("🔋 Maintain battery", callback_data="tip_battery")],
+        [InlineKeyboardButton("⚠️ Hardware failure signs", callback_data="tip_hardware")],
+        [InlineKeyboardButton("🧽 Clean your laptop", callback_data="tip_cleaning")],
+        [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="main_menu")]
+    ])
+    
     await update.message.reply_text("📘 *Tips & Maintenance Guides*\n\nPick a topic:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def handle_find_technician(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🧑‍🔧 *Available Technicians*\n\n"
@@ -694,6 +780,7 @@ async def manage_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item in ITEM_PRICES.keys():
         kb.append([InlineKeyboardButton(f"💰 {item.replace('_', ' ').title()}", callback_data=f"price_item_{item}")])
     kb.append([InlineKeyboardButton("➕ Add New Item", callback_data="add_new_item")])
+    kb.append([InlineKeyboardButton("🗑️ Remove Item", callback_data="remove_item")])  # ADD THIS LINE
     kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
     
     await update.message.reply_text("💰 *Price Management*\n\nSelect item to update prices:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
@@ -837,15 +924,31 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("purchase_"):
         item = data.replace("purchase_", "")
-        # Check if item exists in ITEM_PRICES
-        if item in ITEM_PRICES:
+        if item == "other":
+            user_states[uid] = {"action": "purchase", "item": "other", "step": "custom_item"}
+            await query.edit_message_text("❓ *Custom Item Request*\n\n📝 What item are you looking for?\nExample: `Webcam`, `Mouse`, `Speaker`", parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
+        elif item in ITEM_PRICES:
             await handle_purchase_item(query, item)
         else:
             await query.answer("Item not found!", show_alert=True)
         return
+    
+    if data == "purchase_other":
+        user_states[uid] = {"action": "purchase", "item": "other", "step": "custom_item"}
+        await query.edit_message_text("❓ *Custom Item Request*\n\n📝 What item are you looking for?\nExample: `Webcam`, `Mouse`, `Speaker`", parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
+        return
 
     if data.startswith("inquiry_"):
         typ = data.replace("inquiry_", "")
+        
+        # Check for saved responses first
+        if typ.startswith("saved_"):
+            saved_title = typ.replace("saved_", "")
+            if saved_title in inquiry_responses:
+                response_content = inquiry_responses[saved_title]
+                await query.edit_message_text(f"💡 *{saved_title.replace('_', ' ').title()}*\n\n{response_content}", parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
+                return
+        
         if typ == "other":
             user_states[uid] = {"action": "inquiry_other"}
             await query.edit_message_text("❓ *Other Inquiry*\n\nTell me what's up:", parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
@@ -866,13 +969,102 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("tip_"):
+        tip_type = data.replace("tip_", "")
+        
+        # Check for saved tips first
+        if tip_type.startswith("saved_"):
+            saved_title = tip_type.replace("saved_", "")
+            if saved_title in tips_guides:
+                tip_content = tips_guides[saved_title]
+                await query.edit_message_text(f"💡 *{saved_title.replace('_', ' ').title()}*\n\n{tip_content}", parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
+                return
+        
+        # Default tips
         tips = {
             "battery": "🔋 *Battery Tips*\n\n✅ Keep 20–80%\n✅ Use original charger\n✅ Avoid heat\n❌ Don't drain to 0%",
             "hardware": "⚠️ *Hardware Signs*\n\n• Weird noises\n• Random shutdowns\n• Overheating\n• Screen flicker",
             "cleaning": "🧽 *Cleaning*\n\nWeekly: screen + keyboard\nMonthly: vents & fans\nUse microfiber + compressed air",
         }
-        await query.edit_message_text(tips.get(data.replace("tip_", ""), "💡 Tips coming soon."), parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
+        await query.edit_message_text(tips.get(tip_type, "💡 Tips coming soon."), parse_mode=ParseMode.MARKDOWN, reply_markup=back_menu())
         return
+
+
+    if data == "add_tip_guide":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        user_states[uid] = {"action": "manage_tips", "step": "add_title"}
+        await query.edit_message_text("📝 *Add New Tip*\n\nEnter tip title/category:\nExample: `virus_protection`, `speed_optimization`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data == "view_tips_guides":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not tips_guides:
+            await query.edit_message_text("📭 No custom tips saved yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        text = "📋 *Saved Tips:*\n\n"
+        for title, content in tips_guides.items():
+            text += f"**{title}:**\n{content[:100]}{'...' if len(content) > 100 else ''}\n\n"
+        
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        return
+
+    if data == "edit_tip_guide":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not tips_guides:
+            await query.edit_message_text("📭 No tips to edit.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        kb = []
+        for title in tips_guides.keys():
+            kb.append([InlineKeyboardButton(f"✏️ {title}", callback_data=f"edit_tip_{title}")])
+        kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+        
+        await query.edit_message_text("✏️ *Select tip to edit:*", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data == "delete_tip_guide":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not tips_guides:
+            await query.edit_message_text("📭 No tips to delete.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        kb = []
+        for title in tips_guides.keys():
+            kb.append([InlineKeyboardButton(f"🗑️ {title}", callback_data=f"delete_tip_{title}")])
+        kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+        
+        await query.edit_message_text("🗑️ *Select tip to delete:*", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("edit_tip_"):
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        title = data.replace("edit_tip_", "")
+        user_states[uid] = {"action": "manage_tips", "step": "edit_content", "edit_title": title}
+        current_content = tips_guides.get(title, "")
+        await query.edit_message_text(f"✏️ *Edit Tip: {title}*\n\nCurrent content:\n{current_content}\n\nEnter new content:", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data.startswith("delete_tip_"):
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        title = data.replace("delete_tip_", "")
+        if title in tips_guides:
+            del tips_guides[title]
+            save_all()
+            await query.edit_message_text(f"✅ Deleted tip: {title}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        return
+
 
     if data == "callback":
         user_states[uid] = {"action": "callback"}
@@ -941,6 +1133,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[uid] = {"action": "manage_technicians", "tech_action": "edit", "step": "select"}
         await query.edit_message_text(f"📝 *Edit Technician*\n\n{tech_list}\n\nEnter number to edit:", parse_mode=ParseMode.MARKDOWN)
         return
+
 
     if data == "list_technicians":
         if not is_owner(update):
@@ -1040,7 +1233,117 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_owner(update):
             await query.answer("Access denied", show_alert=True)
             return
+        user_states[uid] = {"action": "admin_price", "step": "new_item"}
+        await query.edit_message_text("➕ *Add New Item*\n\nEnter item name (e.g., 'webcam', 'speaker'):", parse_mode=ParseMode.MARKDOWN)
+        return
         
+
+    if data == "add_inquiry_response":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        user_states[uid] = {"action": "manage_inquiry", "step": "add_title"}
+        await query.edit_message_text("📝 *Add Quick Response*\n\nEnter response title/category:\nExample: `boot_issues`, `performance_tips`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data == "view_inquiry_responses":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not inquiry_responses:
+            await query.edit_message_text("📭 No responses saved yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        text = "📋 *Saved Responses:*\n\n"
+        for title, content in inquiry_responses.items():
+            text += f"**{title}:**\n{content[:100]}{'...' if len(content) > 100 else ''}\n\n"
+        
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        return
+
+
+    if data == "edit_inquiry_response":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not inquiry_responses:
+            await query.edit_message_text("📭 No responses to edit.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        kb = []
+        for title in inquiry_responses.keys():
+            kb.append([InlineKeyboardButton(f"✏️ {title}", callback_data=f"edit_response_{title}")])
+        kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+        
+        await query.edit_message_text("✏️ *Select response to edit:*", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data == "remove_item":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not ITEM_PRICES:
+            await query.edit_message_text("📭 No items to remove.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        kb = []
+        for item in ITEM_PRICES.keys():
+            kb.append([InlineKeyboardButton(f"🗑️ {item.replace('_', ' ').title()}", callback_data=f"delete_item_{item}")])
+        kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+        
+        await query.edit_message_text("🗑️ *Select item to remove:*", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("delete_item_"):
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        item = data.replace("delete_item_", "")
+        if item in ITEM_PRICES:
+            del ITEM_PRICES[item]
+            save_all()
+            await query.edit_message_text(f"✅ Deleted item: {item.replace('_', ' ').title()}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        return
+
+
+    if data == "delete_inquiry_response":
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        if not inquiry_responses:
+            await query.edit_message_text("📭 No responses to delete.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+            return
+        
+        kb = []
+        for title in inquiry_responses.keys():
+            kb.append([InlineKeyboardButton(f"🗑️ {title}", callback_data=f"delete_response_{title}")])
+        kb.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+        
+        await query.edit_message_text("🗑️ *Select response to delete:*", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("edit_response_"):
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        title = data.replace("edit_response_", "")
+        user_states[uid] = {"action": "manage_inquiry", "step": "edit_content", "edit_title": title}
+        current_content = inquiry_responses.get(title, "")
+        await query.edit_message_text(f"✏️ *Edit Response: {title}*\n\nCurrent content:\n{current_content}\n\nEnter new content:", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if data.startswith("delete_response_"):
+        if not is_owner(update):
+            await query.answer("Access denied", show_alert=True)
+            return
+        title = data.replace("delete_response_", "")
+        if title in inquiry_responses:
+            del inquiry_responses[title]
+            save_all()
+            await query.edit_message_text(f"✅ Deleted response: {title}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        return
+
+
         user_states[uid] = {"action": "admin_price", "step": "new_item"}
         await query.edit_message_text("➕ *Add New Item*\n\nEnter item name (e.g., 'webcam', 'speaker'):", parse_mode=ParseMode.MARKDOWN)
         return
@@ -1240,6 +1543,27 @@ async def manage_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
+
+async def handle_manage_inquiry_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
+    uid = update.effective_user.id
+    text = (update.message.text or "").strip()
+    step = state.get("step")
+    
+    if step == "add_title":
+        state["new_title"] = text.lower().replace(" ", "_")
+        state["step"] = "add_content"
+        await update.message.reply_text("📝 Now enter the response content:")
+    elif step == "add_content":
+        inquiry_responses[state["new_title"]] = text
+        save_all()
+        await update.message.reply_text(f"✅ Added response: {state['new_title']}", reply_markup=MAIN_KB)
+        user_states.pop(uid, None)
+    elif step == "edit_content":
+        inquiry_responses[state["edit_title"]] = text
+        save_all()
+        await update.message.reply_text(f"✅ Updated response: {state['edit_title']}", reply_markup=MAIN_KB)
+        user_states.pop(uid, None)
+
 async def handle_payment_info_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
@@ -1257,6 +1581,21 @@ async def handle_payment_info_input(update: Update, context: ContextTypes.DEFAUL
     user_states.pop(uid, None)
 
 
+async def manage_inquiries(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        await update.message.reply_text("❌ Access denied.")
+        return
+    
+    kb = [
+        [InlineKeyboardButton("📝 Add Quick Response", callback_data="add_inquiry_response")],
+        [InlineKeyboardButton("📋 View All Responses", callback_data="view_inquiry_responses")],
+        [InlineKeyboardButton("✏️ Edit Response", callback_data="edit_inquiry_response")],
+        [InlineKeyboardButton("🗑️ Delete Response", callback_data="delete_inquiry_response")],
+        [InlineKeyboardButton("🏠 Back", callback_data="main_menu")],
+    ]
+    await update.message.reply_text("❓ *Inquiry Management*\n\nManage quick responses for common inquiries:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+
 async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         await update.message.reply_text("❌ Access denied.")
@@ -1270,6 +1609,41 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🏠 Back", callback_data="main_menu")],
     ]
     await update.message.reply_text("🔧 *Admin Management*\n\nWhat would you like to manage?", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
+async def handle_manage_tips_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
+    uid = update.effective_user.id
+    text = (update.message.text or "").strip()
+    step = state.get("step")
+    
+    if step == "add_title":
+        state["new_title"] = text.lower().replace(" ", "_")
+        state["step"] = "add_content"
+        await update.message.reply_text("📝 Now enter the tip/guide content:")
+    elif step == "add_content":
+        tips_guides[state["new_title"]] = text
+        save_all()
+        await update.message.reply_text(f"✅ Added tip: {state['new_title']}", reply_markup=MAIN_KB)
+        user_states.pop(uid, None)
+    elif step == "edit_content":
+        tips_guides[state["edit_title"]] = text
+        save_all()
+        await update.message.reply_text(f"✅ Updated tip: {state['edit_title']}", reply_markup=MAIN_KB)
+        user_states.pop(uid, None)
+
+
+async def manage_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        await update.message.reply_text("❌ Access denied.")
+        return
+    
+    kb = [
+        [InlineKeyboardButton("📝 Add New Tip", callback_data="add_tip_guide")],
+        [InlineKeyboardButton("📋 View All Tips", callback_data="view_tips_guides")],
+        [InlineKeyboardButton("✏️ Edit Tip", callback_data="edit_tip_guide")],
+        [InlineKeyboardButton("🗑️ Delete Tip", callback_data="delete_tip_guide")],
+        [InlineKeyboardButton("🏠 Back", callback_data="main_menu")],
+    ]
+    await update.message.reply_text("📘 *Tips & Guides Management*\n\nManage tips and maintenance guides:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_admin_requests(query, request_type: str):
     stores = {"orders": orders, "issues": issues, "callbacks": callbacks, "inquiries": inquiries}
@@ -1430,13 +1804,13 @@ def main():
     app.add_handler(CommandHandler("listadmins", list_admins))
     app.add_handler(CommandHandler("technicians", manage_technicians))
     app.add_handler(CommandHandler("payment", manage_payment_info))
-    
+    app.add_handler(CommandHandler("inquiries", manage_inquiries))
     # Messages and callbacks
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_error_handler(error_handler)
-    
+    app.add_handler(CommandHandler("tips", manage_tips))
     logger.info("🚀 Teeshoot bot is running...")
     app.run_polling()
 
