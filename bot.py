@@ -482,7 +482,7 @@ async def handle_callback_input(update: Update, context: ContextTypes.DEFAULT_TY
     callbacks[cbid] = CallbackReq(uid, update.effective_user.username, update.effective_user.first_name, text)
     save_all()
 
-    await update.message.reply_text(f"📞 *Callback Request Submitted*\n\n📋 Request ID: `{cbid}`\n⏰ We'll call you back ASAP during business hours.\n\nThanks for rocking with Teeshoot! 🙏🾾\n", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
+    await update.message.reply_text(f"📞 *Callback Request Submitted*\n\n📋 Request ID: `{cbid}`\n⏰ We'll call you back ASAP during business hours.\n\nThanks for rocking with OBLAK! 🙏🾾\n", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
     user_profile = user_data_store.get(uid, UserProfile())
     user_info = f"{callbacks[cbid].name}"
     if callbacks[cbid].username:
@@ -1816,3 +1816,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
