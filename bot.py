@@ -1650,20 +1650,42 @@ async def show_admin_requests(query, request_type: str):
     store = stores[request_type]
     
     if not store:
-        await query.edit_message_text(f"📭 No {request_type} found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]))
+        await query.edit_message_text(
+            f"📭 No {request_type} found.", 
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]])
+        )
         return
     
+    # FIXED: Show ALL requests instead of just 10
+    sorted_items = sorted(store.items(), key=lambda x: x[1].timestamp, reverse=True)
+    
+    # Add stats at the top
+    total_count = len(sorted_items)
+    pending_count = sum(1 for _, item in sorted_items if item.status in ["pending", "collecting_info", "reported", "pending_confirmation", "payment_submitted"])
+    
     kb = []
-    # Sort by timestamp (newest first) and take latest 10
-    sorted_items = sorted(store.items(), key=lambda x: x[1].timestamp, reverse=True)[:10]
+    
+    # Show all requests
     for req_id, item in sorted_items:
-        status_emoji = "⏳" if item.status in ["pending", "collecting_info", "reported", "pending_confirmation"] else "✅"
-        kb.append([InlineKeyboardButton(f"{status_emoji} {req_id} - {item.name}", callback_data=f"admin_view_{req_id}")])
+        status_emoji = "⏳" if item.status in ["pending", "collecting_info", "reported", "pending_confirmation", "payment_submitted"] else "✅"
+        # Truncate name if too long
+        display_name = item.name[:15] + "..." if len(item.name) > 15 else item.name
+        kb.append([InlineKeyboardButton(
+            f"{status_emoji} {req_id} - {display_name}", 
+            callback_data=f"admin_view_{req_id}"
+        )])
     
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}")])
     kb.append([InlineKeyboardButton("🏠 Back", callback_data="admin_manage")])
     
-    await query.edit_message_text(f"📋 *Latest {request_type.title()}*\n\nClick to manage:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+    # Show count in message
+    header = f"📋 *All {request_type.title()}*\n\n📊 Total: {total_count} | ⏳ Pending: {pending_count}\n\nClick to manage:"
+    
+    await query.edit_message_text(
+        header, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 async def show_request_details(query, req_id: str):
     # Find the request in all stores
@@ -1816,4 +1838,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
