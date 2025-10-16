@@ -1737,7 +1737,30 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Access denied.")
         return
     
-    # Count pending items
+    # If called as /manage without arguments, cycle through each type
+    if isinstance(update, Update) and update.message and update.message.text == "/manage":
+        # Find first category with items
+        all_categories = [
+            ("orders", orders), 
+            ("issues", issues), 
+            ("callbacks", callbacks), 
+            ("inquiries", inquiries)
+        ]
+        
+        for category, store in all_categories:
+            if store:
+                query_mock = type('QueryMock', (), {
+                    'edit_message_text': update.message.reply_text,
+                    'message': update.message
+                })
+                await show_admin_requests(query_mock, category)
+                return
+                
+        # If no items found in any category
+        await update.message.reply_text("📭 No requests found in any category.")
+        return
+    
+    # Otherwise show the admin dashboard
     pending_orders = sum(1 for o in orders.values() if o.status in ["pending_confirmation", "payment_submitted"])
     pending_issues = sum(1 for i in issues.values() if i.status in ["reported", "under_review"])
     pending_callbacks = sum(1 for c in callbacks.values() if c.status == "pending")
@@ -1805,17 +1828,16 @@ async def show_admin_requests(query, request_type: str):
     store = stores[request_type]
     
     if not store:
-        await query.edit_message_text(
-            f"📭 No {request_type} found.", 
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
-        )
+        message = f"📭 No {request_type} found."
+        kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]]
+        
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await query.reply_text(message, reply_markup=InlineKeyboardMarkup(kb))
         return
     
-    # Sort by timestamp (newest first)
-    sorted_items = sorted(store.items(), key=lambda x: x[1].timestamp, reverse=True)
-    
-    # Calculate stats
-    total_count = len(sorted_items)
+    # Sort by timestamp (newest first) and filter by status
     if request_type == "orders":
         pending_statuses = ["pending_confirmation", "payment_submitted", "confirmed"]
     elif request_type == "issues":
@@ -1825,10 +1847,30 @@ async def show_admin_requests(query, request_type: str):
     else:  # inquiries
         pending_statuses = ["pending_response"]
     
-    pending_count = sum(1 for _, item in sorted_items if item.status in pending_statuses)
+    # First show pending items, then others
+    pending_items = []
+    other_items = []
+    for req_id, item in store.items():
+        if item.status in pending_statuses:
+            pending_items.append((req_id, item))
+        else:
+            other_items.append((req_id, item))
+            
+    # Sort both lists by timestamp
+    pending_items.sort(key=lambda x: x[1].timestamp, reverse=True)
+    other_items.sort(key=lambda x: x[1].timestamp, reverse=True)
+    
+    # Combine lists with pending first
+    sorted_items = pending_items + other_items
+    
+    # Calculate stats
+    total_count = len(sorted_items)
+    pending_count = len(pending_items)
     
     # Build keyboard with ALL requests
     kb = []
+    
+    # Add pending items first
     for req_id, item in sorted_items:
         # Status emoji
         if item.status in pending_statuses:
@@ -1836,29 +1878,52 @@ async def show_admin_requests(query, request_type: str):
         else:
             status_emoji = "✅"
         
-        # Truncate name if too long
-        display_name = item.name[:12] + "..." if len(item.name) > 12 else item.name
+        # Show more info in the button
+        if request_type == "orders":
+            display_name = f"{item.item.replace('_', ' ').title()[:10]} - {item.name[:10]}"
+        else:
+            display_name = item.name[:15]
         
-        # Create button
-        button_text = f"{status_emoji} {req_id} - {display_name}"
+        # Create button with status and timestamp
+        timestamp = item.timestamp.split()[1]  # Get just the time part
+        button_text = f"{status_emoji} {req_id} | {display_name} ({timestamp})"
         kb.append([InlineKeyboardButton(button_text, callback_data=f"admin_view_{req_id}")])
     
     # Add navigation buttons
-    kb.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}")])
-    kb.append([InlineKeyboardButton("🔙 Back", callback_data="admin_manage")])
+    nav_buttons = []
+    if total_count > 0:
+        nav_buttons.append(InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}"))
+    
+    # Add category navigation
+    next_category = {
+        "orders": "issues",
+        "issues": "callbacks",
+        "callbacks": "inquiries",
+        "inquiries": "orders"
+    }
+    nav_buttons.append(InlineKeyboardButton("➡️ Next Category", callback_data=f"admin_{next_category[request_type]}"))
+    
+    kb.append(nav_buttons)
+    kb.append([InlineKeyboardButton("🔙 Main Menu", callback_data="admin_manage")])
     
     # Header message
     header = (
         f"📋 *{request_type.title()} Management*\n\n"
-        f"📊 Total: {total_count} | ⏳ Pending: {pending_count}\n\n"
-        f"Tap to view details:"
+        f"📊 Total: {total_count} | ⏳ Pending: {pending_count}\n"
     )
     
-    await query.edit_message_text(
-        header, 
-        parse_mode=ParseMode.MARKDOWN, 
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+    if hasattr(query, 'edit_message_text'):
+        await query.edit_message_text(
+            header,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+    else:
+        await query.reply_text(
+            header,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
 
 
 async def show_request_details(query, req_id: str):
@@ -1868,14 +1933,30 @@ async def show_request_details(query, req_id: str):
     
     item = None
     prefix = req_id[:3]
+    store_type = None
     
     if prefix in all_stores and req_id in all_stores[prefix]:
         item = all_stores[prefix][req_id]
+        if prefix == "ORD":
+            store_type = "orders"
+        elif prefix == "ISS":
+            store_type = "issues"
+        elif prefix == "CB":
+            store_type = "callbacks"
+        elif prefix == "INQ":
+            store_type = "inquiries"
     else:
-        await query.edit_message_text(
-            "❌ Request not found or has been deleted.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
-        )
+        error_message = "❌ Request not found or has been deleted."
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text(
+                error_message,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
+            )
+        else:
+            await query.reply_text(
+                error_message,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
+            )
         return
     
     # Build details text based on type
