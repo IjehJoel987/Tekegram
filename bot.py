@@ -20,7 +20,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 BOT_TOKEN = "8419540148:AAFecDSbpcxB2-cys1bhuCZWV2qrWxEPpRY"
-CLIENT_ID = 7160317469
+CLIENT_ID = 6340039582
 NIGERIA_TZ = timezone(timedelta(hours=1))
 DATA_FILE = "teeshoot_data.json"
 # Admin management
@@ -1838,5 +1838,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
