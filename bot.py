@@ -333,6 +333,25 @@ MAIN_BTNS = [
 ]
 MAIN_KB = ReplyKeyboardMarkup(MAIN_BTNS, resize_keyboard=True)
 
+# Category navigation helpers
+CATEGORY_ORDER = ["orders", "issues", "callbacks", "inquiries"]
+
+def get_next_category(current: str) -> str:
+    """Get the next category in the navigation order"""
+    try:
+        idx = CATEGORY_ORDER.index(current)
+        return CATEGORY_ORDER[(idx + 1) % len(CATEGORY_ORDER)]
+    except ValueError:
+        return "orders"
+
+def get_prev_category(current: str) -> str:
+    """Get the previous category in the navigation order"""
+    try:
+        idx = CATEGORY_ORDER.index(current)
+        return CATEGORY_ORDER[(idx - 1) % len(CATEGORY_ORDER)]
+    except ValueError:
+        return "orders"
+
 def fmt_money(n: int) -> str: return f"₦{n:,}"
 def is_valid_phone(s: str) -> bool: return bool(re.match(r"^(?:\+?234|0)\d{10}$", re.sub(r"[^\d+]", "", s)))
 def safe_username(u: Optional[str]) -> str: return f"@{u}" if u else "No username"
@@ -1756,43 +1775,66 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     # Always reload data to ensure fresh state
     load_all()
-    
-    # If called as /manage without arguments, cycle through each type
+
+    # If called as /manage without arguments, show default view
     if isinstance(update, Update) and update.message and update.message.text == "/manage":
-        # Find first category with items
-        all_categories = [
-            ("orders", orders), 
-            ("issues", issues), 
-            ("callbacks", callbacks), 
-            ("inquiries", inquiries)
-        ]
-        
-        for category, store in all_categories:
-            if store:
-                query_mock = type('QueryMock', (), {
-                    'edit_message_text': update.message.reply_text,
-                    'message': update.message
-                })
-                await show_admin_requests(query_mock, category)
+        try:
+            # Count items in each category
+            all_categories = {
+                "orders": orders,
+                "issues": issues,
+                "callbacks": callbacks,
+                "inquiries": inquiries
+            }
+            
+            counts = {cat: len(store) for cat, store in all_categories.items()}
+            total = sum(counts.values())
+            
+            if total == 0:
+                await update.message.reply_text(
+                    "📭 No active requests found in any category.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="admin_manage")]])
+                )
                 return
-                
-        # If no items found in any category
-        await update.message.reply_text("📭 No requests found in any category.")
-        return
-    
+            
+            # Find first non-empty category
+            first_category = next((cat for cat, count in counts.items() if count > 0), "orders")
+            
+            # Create a mock query object that works with show_admin_requests
+            query_mock = type('QueryMock', (), {
+                'reply_text': update.message.reply_text,
+                'message': update.message
+            })
+            
+            await show_admin_requests(query_mock, first_category)
+            return
+            
+        except Exception as e:
+            logger.error(f"Error in admin_manage command handler: {e}")
+            await update.message.reply_text(
+                "⚠️ Loading management interface...",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="admin_manage")]])
+            )
+            return
+
     # Otherwise show the admin dashboard
-    pending_orders = sum(1 for o in orders.values() if o.status in ["pending_confirmation", "payment_submitted"])
-    pending_issues = sum(1 for i in issues.values() if i.status in ["reported", "under_review"])
-    pending_callbacks = sum(1 for c in callbacks.values() if c.status == "pending")
-    pending_inquiries = sum(1 for i in inquiries.values() if i.status == "pending_response")
-    
-    kb = [
-        [InlineKeyboardButton(f"📦 Orders ({pending_orders})", callback_data="admin_orders")],
-        [InlineKeyboardButton(f"🛠 Issues ({pending_issues})", callback_data="admin_issues")],
-        [InlineKeyboardButton(f"📞 Callbacks ({pending_callbacks})", callback_data="admin_callbacks")],
-        [InlineKeyboardButton(f"❓ Inquiries ({pending_inquiries})", callback_data="admin_inquiries")],
-        [InlineKeyboardButton("🏠 Close", callback_data="main_menu")],
-    ]
+    try:
+        pending_orders = sum(1 for o in orders.values() if o.status in ["pending_confirmation", "payment_submitted"])
+        pending_issues = sum(1 for i in issues.values() if i.status in ["reported", "under_review"])
+        pending_callbacks = sum(1 for c in callbacks.values() if c.status == "pending")
+        pending_inquiries = sum(1 for i in inquiries.values() if i.status == "pending_response")
+        
+        kb = [
+            [InlineKeyboardButton(f"📦 Orders ({pending_orders})", callback_data="admin_orders")],
+            [InlineKeyboardButton(f"🛠 Issues ({pending_issues})", callback_data="admin_issues")],
+            [InlineKeyboardButton(f"📞 Callbacks ({pending_callbacks})", callback_data="admin_callbacks")],
+            [InlineKeyboardButton(f"❓ Inquiries ({pending_inquiries})", callback_data="admin_inquiries")],
+            [InlineKeyboardButton("🏠 Close", callback_data="main_menu")],
+        ]
+    except Exception as e:
+        logger.error(f"Error building admin dashboard: {e}")
+        await update.message.reply_text("⚠️ Error loading dashboard counts. Please try again.")
+        return
     
     text = (
         f"🔧 *Admin Management*\n\n"
@@ -1847,12 +1889,30 @@ async def show_admin_requests(query, request_type: str):
     # Always reload data before showing requests
     load_all()
     
-    # Map request types to stores
-    stores = {"orders": orders, "issues": issues, "callbacks": callbacks, "inquiries": inquiries}
-    store = stores[request_type]
-    
-    # Log the current state for debugging
-    logger.info(f"Showing {request_type}. Current count: {len(store)}")
+    try:
+        # Map request types to stores
+        stores = {"orders": orders, "issues": issues, "callbacks": callbacks, "inquiries": inquiries}
+        store = stores[request_type]
+        
+        # Log the current state for debugging
+        logger.info(f"Showing {request_type}. Current count: {len(store)}")
+        
+        # Prepare the keyboard and message
+        kb = []
+        
+        # Navigation buttons - always show these
+        nav = [
+            InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_{get_prev_category(request_type)}"),
+            InlineKeyboardButton("🔄", callback_data=f"admin_{request_type}"),
+            InlineKeyboardButton("➡️ Next", callback_data=f"admin_{get_next_category(request_type)}")
+        ]
+    except Exception as e:
+        logger.error(f"Error preparing admin view: {e}")
+        if hasattr(query, 'reply_text'):
+            await query.reply_text("⚠️ Error loading management view. Try again.")
+        elif hasattr(query, 'edit_message_text'):
+            await query.edit_message_text("⚠️ Error loading management view. Try again.")
+        return
     
     # Define the navigation order
     navigation_order = ["orders", "issues", "callbacks", "inquiries"]
