@@ -116,7 +116,7 @@ inquiry_responses: Dict[str, str] = {}  # Store predefined responses
 tips_guides: Dict[str, str] = {}  # Store custom tips and guides
 
 def save_all():
-    backup_file = DATA_FILE + ".bak"
+    backup_file = DATA_FILE + ".bak" 
     try:
         data = {
             "user_data": {str(k): asdict(v) for k, v in user_data_store.items()},
@@ -1732,18 +1732,37 @@ async def manage_inquiries(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main admin management menu"""
     if not is_owner(update):
         await update.message.reply_text("❌ Access denied.")
         return
     
+    # Count pending items
+    pending_orders = sum(1 for o in orders.values() if o.status in ["pending_confirmation", "payment_submitted"])
+    pending_issues = sum(1 for i in issues.values() if i.status in ["reported", "under_review"])
+    pending_callbacks = sum(1 for c in callbacks.values() if c.status == "pending")
+    pending_inquiries = sum(1 for i in inquiries.values() if i.status == "pending_response")
+    
     kb = [
-        [InlineKeyboardButton("📦 Manage Orders", callback_data="admin_orders")],
-        [InlineKeyboardButton("🛠 Manage Issues", callback_data="admin_issues")],
-        [InlineKeyboardButton("📞 Manage Callbacks", callback_data="admin_callbacks")],
-        [InlineKeyboardButton("❓ Manage Inquiries", callback_data="admin_inquiries")],
-        [InlineKeyboardButton("🏠 Back", callback_data="main_menu")],
+        [InlineKeyboardButton(f"📦 Orders ({pending_orders})", callback_data="admin_orders")],
+        [InlineKeyboardButton(f"🛠 Issues ({pending_issues})", callback_data="admin_issues")],
+        [InlineKeyboardButton(f"📞 Callbacks ({pending_callbacks})", callback_data="admin_callbacks")],
+        [InlineKeyboardButton(f"❓ Inquiries ({pending_inquiries})", callback_data="admin_inquiries")],
+        [InlineKeyboardButton("🏠 Close", callback_data="main_menu")],
     ]
-    await update.message.reply_text("🔧 *Admin Management*\n\nWhat would you like to manage?", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+    
+    text = (
+        f"🔧 *Admin Management*\n\n"
+        f"📊 Pending Items:\n"
+        f"• Orders: {pending_orders}\n"
+        f"• Issues: {pending_issues}\n"
+        f"• Callbacks: {pending_callbacks}\n"
+        f"• Inquiries: {pending_inquiries}\n\n"
+        f"Select category to manage:"
+    )
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def handle_manage_tips_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
     uid = update.effective_user.id
@@ -1781,40 +1800,59 @@ async def manage_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📘 *Tips & Guides Management*\n\nManage tips and maintenance guides:", parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_admin_requests(query, request_type: str):
+    """Show list of requests by type"""
     stores = {"orders": orders, "issues": issues, "callbacks": callbacks, "inquiries": inquiries}
     store = stores[request_type]
     
     if not store:
         await query.edit_message_text(
             f"📭 No {request_type} found.", 
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
         )
         return
     
-    # FIXED: Show ALL requests instead of just 10
+    # Sort by timestamp (newest first)
     sorted_items = sorted(store.items(), key=lambda x: x[1].timestamp, reverse=True)
     
-    # Add stats at the top
+    # Calculate stats
     total_count = len(sorted_items)
-    pending_count = sum(1 for _, item in sorted_items if item.status in ["pending", "collecting_info", "reported", "pending_confirmation", "payment_submitted"])
+    if request_type == "orders":
+        pending_statuses = ["pending_confirmation", "payment_submitted", "confirmed"]
+    elif request_type == "issues":
+        pending_statuses = ["reported", "under_review"]
+    elif request_type == "callbacks":
+        pending_statuses = ["pending"]
+    else:  # inquiries
+        pending_statuses = ["pending_response"]
     
+    pending_count = sum(1 for _, item in sorted_items if item.status in pending_statuses)
+    
+    # Build keyboard with ALL requests
     kb = []
-    
-    # Show all requests
     for req_id, item in sorted_items:
-        status_emoji = "⏳" if item.status in ["pending", "collecting_info", "reported", "pending_confirmation", "payment_submitted"] else "✅"
+        # Status emoji
+        if item.status in pending_statuses:
+            status_emoji = "⏳"
+        else:
+            status_emoji = "✅"
+        
         # Truncate name if too long
-        display_name = item.name[:15] + "..." if len(item.name) > 15 else item.name
-        kb.append([InlineKeyboardButton(
-            f"{status_emoji} {req_id} - {display_name}", 
-            callback_data=f"admin_view_{req_id}"
-        )])
+        display_name = item.name[:12] + "..." if len(item.name) > 12 else item.name
+        
+        # Create button
+        button_text = f"{status_emoji} {req_id} - {display_name}"
+        kb.append([InlineKeyboardButton(button_text, callback_data=f"admin_view_{req_id}")])
     
+    # Add navigation buttons
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}")])
-    kb.append([InlineKeyboardButton("🏠 Back", callback_data="admin_manage")])
+    kb.append([InlineKeyboardButton("🔙 Back", callback_data="admin_manage")])
     
-    # Show count in message
-    header = f"📋 *All {request_type.title()}*\n\n📊 Total: {total_count} | ⏳ Pending: {pending_count}\n\nClick to manage:"
+    # Header message
+    header = (
+        f"📋 *{request_type.title()} Management*\n\n"
+        f"📊 Total: {total_count} | ⏳ Pending: {pending_count}\n\n"
+        f"Tap to view details:"
+    )
     
     await query.edit_message_text(
         header, 
@@ -1822,116 +1860,161 @@ async def show_admin_requests(query, request_type: str):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
+
 async def show_request_details(query, req_id: str):
-    # Find the request in all stores
+    """Show detailed view of a single request"""
+    # Find the request
     all_stores = {"ORD": orders, "ISS": issues, "CB": callbacks, "INQ": inquiries}
     
-    for prefix, store in all_stores.items():
-        if req_id in store:
-            item = store[req_id]
-            
-            if prefix == "ORD":
-                # Safely get values with defaults
-                model = item.details.get('model', 'N/A')
-                quantity = item.details.get('quantity', 'N/A')
-                total = item.details.get('total', 0)
-                address = item.details.get('address', 'N/A')
-                
-                # Make sure total is a number
-                try:
-                    total = int(total) if total else 0
-                except (ValueError, TypeError):
-                    total = 0
-                
-                # Clean the item name for display
-                item_name = item.item.replace('_', ' ').title() if item.item else 'N/A'
-                
-                details = (
-                    f"📦 Order Details\n\n"
-                    f"ID: {req_id}\n"
-                    f"User: {item.name}\n"
-                    f"Item: {item_name}\n"
-                    f"Model: {model}\n"
-                    f"Quantity: {quantity}\n"
-                    f"Total: N{total:,}\n"
-                    f"Address: {address}\n"
-                    f"Status: {item.status}"
-                )
-                statuses = ["pending_confirmation", "confirmed", "payment_submitted", "payment_verified", "processing", "shipped", "delivered", "cancelled"]
-            elif prefix == "ISS":
-                details = (
-                    f"🛠 Issue Details\n\n"
-                    f"ID: {req_id}\n"
-                    f"User: {item.name}\n"
-                    f"Type: {item.type}\n"
-                    f"Model: {item.details.get('model', 'N/A')}\n"
-                    f"Description: {item.details.get('description', 'N/A')}\n"
-                    f"Status: {item.status}"
-                )
-                statuses = ["reported", "under_review", "in_progress", "resolved", "closed"]
-            elif prefix == "CB":
-                details = (
-                    f"📞 Callback Details\n\n"
-                    f"ID: {req_id}\n"
-                    f"User: {item.name}\n"
-                    f"Phone and Issue: {item.phone_and_issue}\n"
-                    f"Status: {item.status}"
-                )
-                statuses = ["pending", "called", "completed", "no_answer"]
-            elif prefix == "INQ":
-                details = (
-                    f"❓ Inquiry Details\n\n"
-                    f"ID: {req_id}\n"
-                    f"User: {item.name}\n"
-                    f"Type: {item.inquiry_type}\n"
-                    f"Question: {item.inquiry_text}\n"
-                    f"Status: {item.status}"
-                )
-                statuses = ["pending_response", "responded", "resolved"]
-            
-            kb = []
-            for status in statuses:
-                emoji = "✅" if status == item.status else "⚪"
-                kb.append([InlineKeyboardButton(f"{emoji} {status.replace('_', ' ').title()}", callback_data=f"status_{req_id}_{status}")])
-            
-            kb.append([InlineKeyboardButton("🔙 Back to List", callback_data="admin_manage")])
-            
-            # Send without parse_mode to avoid Markdown issues
-            await query.edit_message_text(details, reply_markup=InlineKeyboardMarkup(kb))
-            return
+    item = None
+    prefix = req_id[:3]
     
-    await query.edit_message_text("❌ Request not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back", callback_data="admin_manage")]]))
+    if prefix in all_stores and req_id in all_stores[prefix]:
+        item = all_stores[prefix][req_id]
+    else:
+        await query.edit_message_text(
+            "❌ Request not found or has been deleted.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
+        )
+        return
+    
+    # Build details text based on type
+    if prefix == "ORD":
+        # Order details
+        model = item.details.get('model', 'N/A')
+        quantity = item.details.get('quantity', 'N/A')
+        total = item.details.get('total', 0)
+        address = item.details.get('address', 'N/A')
+        
+        # Format total safely
+        try:
+            total_formatted = f"₦{int(total):,}"
+        except:
+            total_formatted = "₦0"
+        
+        item_name = item.item.replace('_', ' ').title() if hasattr(item, 'item') else 'N/A'
+        
+        details = (
+            f"📦 *Order Details*\n\n"
+            f"🆔 ID: `{req_id}`\n"
+            f"👤 User: {item.name}\n"
+            f"🛒 Item: {item_name}\n"
+            f"📱 Model: {model}\n"
+            f"📦 Qty: {quantity}\n"
+            f"💰 Total: {total_formatted}\n"
+            f"📍 Address: {address}\n"
+            f"📊 Status: *{item.status.replace('_', ' ').title()}*\n"
+            f"⏰ Time: {item.timestamp}"
+        )
+        statuses = ["pending_confirmation", "confirmed", "payment_submitted", "payment_verified", "processing", "shipped", "delivered", "cancelled"]
+        
+    elif prefix == "ISS":
+        # Issue details
+        details = (
+            f"🛠 *Issue Report*\n\n"
+            f"🆔 ID: `{req_id}`\n"
+            f"👤 User: {item.name}\n"
+            f"🔧 Type: {item.type.title()}\n"
+            f"📱 Model: {item.details.get('model', 'N/A')}\n"
+            f"📝 Description:\n{item.details.get('description', 'N/A')}\n"
+            f"📊 Status: *{item.status.replace('_', ' ').title()}*\n"
+            f"⏰ Time: {item.timestamp}"
+        )
+        statuses = ["reported", "under_review", "in_progress", "resolved", "closed"]
+        
+    elif prefix == "CB":
+        # Callback details
+        details = (
+            f"📞 *Callback Request*\n\n"
+            f"🆔 ID: `{req_id}`\n"
+            f"👤 User: {item.name}\n"
+            f"📝 Details:\n{item.phone_and_issue}\n"
+            f"📊 Status: *{item.status.replace('_', ' ').title()}*\n"
+            f"⏰ Time: {item.timestamp}"
+        )
+        statuses = ["pending", "called", "completed", "no_answer"]
+        
+    else:  # INQ
+        # Inquiry details
+        details = (
+            f"❓ *Inquiry*\n\n"
+            f"🆔 ID: `{req_id}`\n"
+            f"👤 User: {item.name}\n"
+            f"📝 Type: {item.inquiry_type.title()}\n"
+            f"❓ Question:\n{item.inquiry_text}\n"
+            f"📊 Status: *{item.status.replace('_', ' ').title()}*\n"
+            f"⏰ Time: {item.timestamp}"
+        )
+        statuses = ["pending_response", "responded", "resolved"]
+    
+    # Build status change keyboard
+    kb = []
+    for status in statuses:
+        if status == item.status:
+            emoji = "✅"
+        else:
+            emoji = "⚪"
+        
+        button_text = f"{emoji} {status.replace('_', ' ').title()}"
+        kb.append([InlineKeyboardButton(button_text, callback_data=f"status_{req_id}_{status}")])
+    
+    # Add back button
+    kb.append([InlineKeyboardButton("🔙 Back to List", callback_data=f"admin_{prefix.lower().replace('ord', 'orders').replace('iss', 'issues').replace('cb', 'callbacks').replace('inq', 'inquiries')}")])
+    
+    await query.edit_message_text(
+        details, 
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
     
 async def update_request_status(query, req_id: str, new_status: str):
-    # Find and update the request
+    """Update status of a request"""
+    # Find and update
     all_stores = {"ORD": orders, "ISS": issues, "CB": callbacks, "INQ": inquiries}
     
-    for prefix, store in all_stores.items():
-        if req_id in store:
-            old_status = store[req_id].status
-            store[req_id].status = new_status
-            save_all()
-            
-            # Notify user if they have notifications enabled
-            user_id = store[req_id].user_id
-            if user_id in user_data_store and user_data_store[user_id].notifications_enabled:
-                try:
-                    await query.bot.send_message(
-                        chat_id=user_id,
-                        text=f"📋 *Status Update*\n\nYour request `{req_id}` status changed:\n{old_status.replace('_', ' ').title()} → {new_status.replace('_', ' ').title()}",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except:
-                    pass
-            
-            await query.edit_message_text(
-                f"✅ Status updated!\n\n`{req_id}`: {old_status} → {new_status}",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"admin_view_{req_id}")]])
-            )
-            return
+    prefix = req_id[:3]
+    
+    if prefix in all_stores and req_id in all_stores[prefix]:
+        store = all_stores[prefix]
+        old_status = store[req_id].status
+        store[req_id].status = new_status
+        save_all()
+        
+        # Notify user
+        user_id = store[req_id].user_id
+        if user_id in user_data_store and user_data_store[user_id].notifications_enabled:
+            try:
+                await query.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"📋 *Status Update*\n\n"
+                        f"Request: `{req_id}`\n"
+                        f"Old Status: {old_status.replace('_', ' ').title()}\n"
+                        f"New Status: *{new_status.replace('_', ' ').title()}*"
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify user: {e}")
+        
+        # Show confirmation
+        await query.edit_message_text(
+            f"✅ *Status Updated!*\n\n"
+            f"Request: `{req_id}`\n"
+            f"From: {old_status.replace('_', ' ').title()}\n"
+            f"To: *{new_status.replace('_', ' ').title()}*\n\n"
+            f"User has been notified.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Details", callback_data=f"admin_view_{req_id}")]])
+        )
+    else:
+        await query.edit_message_text(
+            "❌ Request not found.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]])
+        )
 
+        
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Error: %s", context.error)
     try:
@@ -1973,4 +2056,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
