@@ -116,6 +116,7 @@ inquiry_responses: Dict[str, str] = {}  # Store predefined responses
 tips_guides: Dict[str, str] = {}  # Store custom tips and guides
 
 def save_all():
+    backup_file = DATA_FILE + ".bak"
     try:
         data = {
             "user_data": {str(k): asdict(v) for k, v in user_data_store.items()},
@@ -1972,3 +1973,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
