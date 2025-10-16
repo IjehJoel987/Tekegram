@@ -5,6 +5,7 @@ Teeshoot Telegram Bot - Compact Version with Admin Price Management
 import os
 import re
 import json
+import time
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, Optional, List
@@ -106,6 +107,7 @@ class Inquiry:
     status: str = "pending_response"
     timestamp: str = field(default_factory=now_ng)
 
+# Global storage with proper typing
 user_data_store: Dict[int, UserProfile] = {}
 orders: Dict[str, Order] = {}
 issues: Dict[str, Issue] = {}
@@ -114,6 +116,10 @@ inquiries: Dict[str, Inquiry] = {}
 user_states: Dict[int, Dict[str, Any]] = {}
 inquiry_responses: Dict[str, str] = {}  # Store predefined responses
 tips_guides: Dict[str, str] = {}  # Store custom tips and guides
+
+# Track last data load time to ensure fresh data
+_last_data_load: float = 0
+_DATA_RELOAD_INTERVAL = 5  # seconds
 
 def save_all():
     backup_file = DATA_FILE + ".bak" 
@@ -171,7 +177,14 @@ def save_all():
 
 
 def load_all():
-    global ITEM_PRICES
+    """Load all data from file with proper error handling and backup management"""
+    global ITEM_PRICES, _last_data_load
+    
+    # Skip reload if data is fresh enough
+    now = time.time()
+    if now - _last_data_load < _DATA_RELOAD_INTERVAL:
+        return
+
     if not os.path.exists(DATA_FILE):
         # Check for backup file
         backup_file = DATA_FILE + ".bak"
@@ -388,6 +401,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
+    
+    # For admin commands, always reload data first
+    if text == "/manage":
+        load_all()  # Force data reload
 
     if too_fast(uid):
         await update.message.reply_text("⏳ Chill a sec… processing.", reply_markup=MAIN_KB)
@@ -1736,6 +1753,9 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         await update.message.reply_text("❌ Access denied.")
         return
+        
+    # Always reload data to ensure fresh state
+    load_all()
     
     # If called as /manage without arguments, cycle through each type
     if isinstance(update, Update) and update.message and update.message.text == "/manage":
@@ -1824,12 +1844,42 @@ async def manage_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_admin_requests(query, request_type: str):
     """Show list of requests by type"""
+    # Always reload data before showing requests
+    load_all()
+    
+    # Map request types to stores
     stores = {"orders": orders, "issues": issues, "callbacks": callbacks, "inquiries": inquiries}
     store = stores[request_type]
     
+    # Log the current state for debugging
+    logger.info(f"Showing {request_type}. Current count: {len(store)}")
+    
+    # Define the navigation order
+    navigation_order = ["orders", "issues", "callbacks", "inquiries"]
+    current_index = navigation_order.index(request_type)
+    next_type = navigation_order[(current_index + 1) % len(navigation_order)]
+    prev_type = navigation_order[(current_index - 1) % len(navigation_order)]
+    
     if not store:
         message = f"📭 No {request_type} found."
-        kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_manage")]]
+        # Even with no items, show navigation buttons
+        kb = [
+            [
+                InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_{prev_type}"),
+                InlineKeyboardButton("➡️ Next", callback_data=f"admin_{next_type}")
+            ],
+            [InlineKeyboardButton("🔙 Menu", callback_data="admin_manage")]
+        ]
+        
+        # Add current category counts to message
+        counts = []
+        for category in navigation_order:
+            count = len(stores[category])
+            if count > 0:
+                counts.append(f"{category.title()}: {count}")
+        
+        if counts:
+            message += "\n\n📊 Other categories:\n" + "\n".join(counts)
         
         if hasattr(query, 'edit_message_text'):
             await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(kb))
@@ -1889,22 +1939,26 @@ async def show_admin_requests(query, request_type: str):
         button_text = f"{status_emoji} {req_id} | {display_name} ({timestamp})"
         kb.append([InlineKeyboardButton(button_text, callback_data=f"admin_view_{req_id}")])
     
-    # Add navigation buttons
-    nav_buttons = []
-    if total_count > 0:
-        nav_buttons.append(InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}"))
-    
-    # Add category navigation
-    next_category = {
-        "orders": "issues",
-        "issues": "callbacks",
-        "callbacks": "inquiries",
-        "inquiries": "orders"
-    }
-    nav_buttons.append(InlineKeyboardButton("➡️ Next Category", callback_data=f"admin_{next_category[request_type]}"))
+    # Add navigation and utility buttons
+    nav_buttons = [
+        InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_{prev_type}"),
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_{request_type}"),
+        InlineKeyboardButton("➡️ Next", callback_data=f"admin_{next_type}")
+    ]
     
     kb.append(nav_buttons)
-    kb.append([InlineKeyboardButton("🔙 Main Menu", callback_data="admin_manage")])
+    kb.append([InlineKeyboardButton("🔙 Menu", callback_data="admin_manage")])
+    
+    # Add category counts to header
+    other_counts = []
+    for category in navigation_order:
+        if category != request_type:
+            count = len(stores[category])
+            if count > 0:
+                other_counts.append(f"{category.title()}: {count}")
+    
+    if other_counts:
+        header += "\n\n📊 Other categories:\n" + "\n".join(other_counts)
     
     # Header message
     header = (
