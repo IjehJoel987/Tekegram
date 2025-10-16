@@ -131,50 +131,184 @@ def save_all():
             "inquiry_responses": inquiry_responses,
             "tips_guides": tips_guides,
         }
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
+        
+        # Write to temporary file first
+        temp_file = DATA_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+            
+        # Create backup of existing file if it exists
+        if os.path.exists(DATA_FILE):
+            backup_file = DATA_FILE + ".bak"
+            try:
+                os.replace(DATA_FILE, backup_file)
+            except Exception as e:
+                logger.warning("Failed to create backup: %s", e)
+                
+        # Atomically rename temp file to actual file
+        os.replace(temp_file, DATA_FILE)
+        
+        # Remove old backup if everything succeeded
+        if os.path.exists(backup_file):
+            try:
+                os.remove(backup_file)
+            except Exception as e:
+                logger.warning("Failed to remove backup: %s", e)
+                
     except Exception as e:
         logger.exception("Failed saving data: %s", e)
+        # Try to restore from backup if available
+        backup_file = DATA_FILE + ".bak"
+        if os.path.exists(backup_file):
+            try:
+                os.replace(backup_file, DATA_FILE)
+                logger.info("Restored data from backup file")
+            except Exception as restore_e:
+                logger.exception("Failed to restore from backup: %s", restore_e)
 
 
 def load_all():
     global ITEM_PRICES
     if not os.path.exists(DATA_FILE):
-        return
+        # Check for backup file
+        backup_file = DATA_FILE + ".bak"
+        if os.path.exists(backup_file):
+            try:
+                os.replace(backup_file, DATA_FILE)
+                logger.info("Restored data from backup file")
+            except Exception as e:
+                logger.exception("Failed to restore backup: %s", e)
+                return
+        else:
+            # If no backup exists, this might be first run
+            logger.info("No data file exists yet")
+            save_all()  # Create initial empty data file
+            return
+            
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # Try to read the data file
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            # If main file is corrupted, try backup
+            backup_file = DATA_FILE + ".bak"
+            if os.path.exists(backup_file):
+                with open(backup_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("Loaded data from backup file due to corrupted main file")
+            else:
+                raise
+        
+        # Clear existing data before loading
+        user_data_store.clear()
+        orders.clear()
+        issues.clear()
+        callbacks.clear()
+        inquiries.clear()
+        user_states.clear()
+        
+        # Load each section with proper error handling
         for k, v in data.get("user_data", {}).items():
-            user_data_store[int(k)] = UserProfile(**v)
+            try:
+                user_data_store[int(k)] = UserProfile(**v)
+            except Exception as e:
+                logger.error(f"Failed to load user data for {k}: {e}")
+                
         for k, v in data.get("orders", {}).items():
-            orders[k] = Order(**v)
+            try:
+                orders[k] = Order(**v)
+            except Exception as e:
+                logger.error(f"Failed to load order {k}: {e}")
+                
         for k, v in data.get("issues", {}).items():
-            issues[k] = Issue(**v)
+            try:
+                issues[k] = Issue(**v)
+            except Exception as e:
+                logger.error(f"Failed to load issue {k}: {e}")
+                
         for k, v in data.get("callbacks", {}).items():
-            callbacks[k] = CallbackReq(**v)
+            try:
+                callbacks[k] = CallbackReq(**v)
+            except Exception as e:
+                logger.error(f"Failed to load callback {k}: {e}")
+                
         for k, v in data.get("inquiries", {}).items():
-            inquiries[k] = Inquiry(**v)
-        user_states.update({int(k): v for k, v in data.get("user_states", {}).items()})
+            try:
+                inquiries[k] = Inquiry(**v)
+            except Exception as e:
+                logger.error(f"Failed to load inquiry {k}: {e}")
+        
+        try:
+            user_states.update({int(k): v for k, v in data.get("user_states", {}).items()})
+        except Exception as e:
+            logger.error(f"Failed to load user states: {e}")
+            
         if "item_prices" in data:
-            ITEM_PRICES.update(data["item_prices"])
-        logger.info("Data loaded successfully")
+            try:
+                ITEM_PRICES.update(data["item_prices"])
+            except Exception as e:
+                logger.error(f"Failed to load item prices: {e}")
+                
         if "admin_ids" in data:
-            ADMIN_IDS.update(data["admin_ids"])
-            ADMIN_IDS.add(CLIENT_ID)
+            try:
+                ADMIN_IDS.update(data["admin_ids"])
+                ADMIN_IDS.add(CLIENT_ID)
+            except Exception as e:
+                logger.error(f"Failed to load admin IDs: {e}")
+                
         if "technicians" in data:
-            global TECHNICIANS
-            TECHNICIANS = data["technicians"]
+            try:
+                global TECHNICIANS
+                TECHNICIANS = data["technicians"]
+            except Exception as e:
+                logger.error(f"Failed to load technicians: {e}")
+                
         if "payment_info" in data:
-            global PAYMENT_INFO
-            PAYMENT_INFO = data["payment_info"]
+            try:
+                global PAYMENT_INFO
+                PAYMENT_INFO = data["payment_info"]
+            except Exception as e:
+                logger.error(f"Failed to load payment info: {e}")
+                
         if "inquiry_responses" in data:
-            global inquiry_responses
-            inquiry_responses = data["inquiry_responses"]
+            try:
+                global inquiry_responses
+                inquiry_responses = data["inquiry_responses"]
+            except Exception as e:
+                logger.error(f"Failed to load inquiry responses: {e}")
+                
         if "tips_guides" in data:
-            global tips_guides
-            tips_guides = data["tips_guides"]
+            try:
+                global tips_guides
+                tips_guides = data["tips_guides"]
+            except Exception as e:
+                logger.error(f"Failed to load tips and guides: {e}")
+                
+        logger.info("Data loaded successfully")
+        
+        # After successful load, create a backup
+        backup_file = DATA_FILE + ".bak"
+        try:
+            import shutil
+            shutil.copy2(DATA_FILE, backup_file)
+        except Exception as e:
+            logger.warning("Failed to create backup after load: %s", e)
+            
     except Exception as e:
-        logger.exception("Failed loading data: %s", e)
+        logger.exception("Critical error loading data: %s", e)
+        # Try to restore from backup
+        backup_file = DATA_FILE + ".bak"
+        if os.path.exists(backup_file):
+            try:
+                os.replace(backup_file, DATA_FILE)
+                logger.info("Restored data from backup file after critical error")
+                # Recursively try to load again
+                load_all()
+            except Exception as restore_e:
+                logger.exception("Failed to restore from backup: %s", restore_e)
 
 # UI and helpers
 MAIN_BTNS = [
@@ -1838,6 +1972,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
