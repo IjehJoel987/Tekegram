@@ -178,12 +178,21 @@ def save_all():
 
 def load_all():
     """Load all data from file with proper error handling and backup management"""
-    global ITEM_PRICES, _last_data_load
+    global ITEM_PRICES, _last_data_load, orders, issues, callbacks, inquiries, user_data_store
     
     # Skip reload if data is fresh enough
     now = time.time()
     if now - _last_data_load < _DATA_RELOAD_INTERVAL:
         return
+        
+    # Initialize empty data structures if they don't exist
+    if not hasattr(load_all, 'initialized'):
+        orders = {}
+        issues = {}
+        callbacks = {}
+        inquiries = {}
+        user_data_store = {}
+        load_all.initialized = True
 
     if not os.path.exists(DATA_FILE):
         # Check for backup file
@@ -1774,7 +1783,12 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     # Always reload data to ensure fresh state
-    load_all()
+    try:
+        load_all()
+    except Exception as e:
+        logger.error(f"Failed to load data: {e}")
+        await update.message.reply_text("⚠️ Failed to load data. Creating fresh data file...")
+        save_all()  # Create fresh data file
 
     # If called as /manage without arguments, show default view
     if isinstance(update, Update) and update.message and update.message.text == "/manage":
@@ -2176,6 +2190,9 @@ async def update_request_status(query, req_id: str, new_status: str):
         store[req_id].status = new_status
         save_all()
         
+        # Save first to ensure data is persisted
+        save_all()
+        
         # Notify user
         user_id = store[req_id].user_id
         if user_id in user_data_store and user_data_store[user_id].notifications_enabled:
@@ -2192,6 +2209,7 @@ async def update_request_status(query, req_id: str, new_status: str):
                 )
             except Exception as e:
                 logger.warning(f"Failed to notify user: {e}")
+                # Continue even if notification fails
         
         # Show confirmation
         await query.edit_message_text(
