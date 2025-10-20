@@ -430,6 +430,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
     
+    # Check for admin status update command
+    if is_owner(update) and update.message.reply_to_message:
+        # Look for "status X" command
+        if text.lower().startswith('status '):
+            new_status = text[7:].strip()
+            # Find request ID in original message
+            orig_text = update.message.reply_to_message.text
+            import re
+            # Look for any request ID format (ORD, ISS, CB, INQ followed by numbers)
+            match = re.search(r'((?:ORD|ISS|CB|INQ)\d+)', orig_text)
+            if match:
+                req_id = match.group(1)
+                # Determine store based on prefix
+                prefix = req_id[:3]
+                store = None
+                if prefix == 'ORD': store = orders
+                elif prefix == 'ISS': store = issues
+                elif prefix == 'CB': store = callbacks
+                elif prefix == 'INQ': store = inquiries
+                
+                if store and req_id in store:
+                    store[req_id].status = new_status
+                    save_all()
+                    await update.message.reply_text(f"✅ Status updated for {req_id} to: {new_status}")
+                    # Show updated admin view
+                    await admin_manage(update, context)
+                    return
+    
     # For admin commands, always reload data first
     if text == "/manage":
         load_all()  # Force data reload
@@ -1777,90 +1805,59 @@ async def manage_inquiries(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main admin management menu"""
+    """Main admin management menu - Simplified Version"""
     if not is_owner(update):
         await update.message.reply_text("❌ Access denied.")
         return
-        
-    # Always reload data to ensure fresh state
+
     try:
+        # Reload data
         load_all()
-    except Exception as e:
-        logger.error(f"Failed to load data: {e}")
-        await update.message.reply_text("⚠️ Failed to load data. Creating fresh data file...")
-        save_all()  # Create fresh data file
-
-    # If called as /manage without arguments, show default view
-    if isinstance(update, Update) and update.message and update.message.text == "/manage":
-        try:
-            # Count items in each category
-            all_categories = {
-                "orders": orders,
-                "issues": issues,
-                "callbacks": callbacks,
-                "inquiries": inquiries
-            }
-            
-            counts = {cat: len(store) for cat, store in all_categories.items()}
-            total = sum(counts.values())
-            
-            if total == 0:
-                await update.message.reply_text(
-                    "📭 No active requests found in any category.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="admin_manage")]])
-                )
-                return
-            
-            # Find first non-empty category
-            first_category = next((cat for cat, count in counts.items() if count > 0), "orders")
-            
-            # Create a mock query object that works with show_admin_requests
-            query_mock = type('QueryMock', (), {
-                'reply_text': update.message.reply_text,
-                'message': update.message
-            })
-            
-            await show_admin_requests(query_mock, first_category)
-            return
-            
-        except Exception as e:
-            logger.error(f"Error in admin_manage command handler: {e}")
-            await update.message.reply_text(
-                "⚠️ Loading management interface...",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="admin_manage")]])
-            )
-            return
-
-    # Otherwise show the admin dashboard
-    try:
-        pending_orders = sum(1 for o in orders.values() if o.status in ["pending_confirmation", "payment_submitted"])
-        pending_issues = sum(1 for i in issues.values() if i.status in ["reported", "under_review"])
-        pending_callbacks = sum(1 for c in callbacks.values() if c.status == "pending")
-        pending_inquiries = sum(1 for i in inquiries.values() if i.status == "pending_response")
         
-        kb = [
-            [InlineKeyboardButton(f"📦 Orders ({pending_orders})", callback_data="admin_orders")],
-            [InlineKeyboardButton(f"🛠 Issues ({pending_issues})", callback_data="admin_issues")],
-            [InlineKeyboardButton(f"📞 Callbacks ({pending_callbacks})", callback_data="admin_callbacks")],
-            [InlineKeyboardButton(f"❓ Inquiries ({pending_inquiries})", callback_data="admin_inquiries")],
-            [InlineKeyboardButton("🏠 Close", callback_data="main_menu")],
-        ]
+        # Build a simple text summary of all requests
+        text = "📊 *Admin Dashboard*\n\n"
+        
+        # Orders Summary
+        text += "📦 *ORDERS:*\n"
+        if not orders:
+            text += "No orders yet\n"
+        else:
+            for oid, order in orders.items():
+                text += f"• {oid} | {order.item.replace('_',' ').title()} | {order.status}\n"
+        
+        text += "\n🛠 *ISSUES:*\n"
+        if not issues:
+            text += "No issues reported\n"
+        else:
+            for iid, issue in issues.items():
+                text += f"• {iid} | {issue.type} | {issue.status}\n"
+        
+        text += "\n📞 *CALLBACKS:*\n"
+        if not callbacks:
+            text += "No callbacks requested\n"
+        else:
+            for cid, cb in callbacks.items():
+                text += f"• {cid} | {cb.status}\n"
+                
+        text += "\n❓ *INQUIRIES:*\n"
+        if not inquiries:
+            text += "No inquiries yet\n"
+        else:
+            for qid, inq in inquiries.items():
+                text += f"• {qid} | {inq.status}\n"
+                
+        # Add instructions
+        text += "\n📝 *COMMANDS:*\n"
+        text += "• Reply to any ID with 'status X' to change status\n"
+        text += "• Example: `status confirmed` or `status resolved`\n"
+        text += "• Use /refresh to update this view\n"
+        
+        # Send the message
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        
     except Exception as e:
-        logger.error(f"Error building admin dashboard: {e}")
-        await update.message.reply_text("⚠️ Error loading dashboard counts. Please try again.")
-        return
-    
-    text = (
-        f"🔧 *Admin Management*\n\n"
-        f"📊 Pending Items:\n"
-        f"• Orders: {pending_orders}\n"
-        f"• Issues: {pending_issues}\n"
-        f"• Callbacks: {pending_callbacks}\n"
-        f"• Inquiries: {pending_inquiries}\n\n"
-        f"Select category to manage:"
-    )
-    
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        logger.error(f"Error in admin_manage: {e}")
+        await update.message.reply_text("⚠️ Error loading admin view. Please try again.", reply_markup=MAIN_KB)
 
 
 async def handle_manage_tips_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
@@ -2235,6 +2232,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=update.effective_chat.id, text="⚠️ Something went wrong. Try again.")
     except: pass
 
+async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Refresh admin view"""
+    if is_owner(update):
+        await admin_manage(update, context)
+    else:
+        await update.message.reply_text("❌ Admin only command.")
+
 def main():
     load_all()
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -2244,6 +2248,7 @@ def main():
     
     # Commands
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("refresh", refresh))  # Add refresh command
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("id", show_id))
