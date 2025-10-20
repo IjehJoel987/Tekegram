@@ -412,7 +412,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = "🆘 *Help*\n\n• /start — show main menu\n• /help — this screen\n• /cancel — cancel current flow\n• /id — show your Telegram ID\n• /admin — (admin only) stats\n• /broadcast <msg> — (admin)\n• /dump — (admin) dump JSON snapshot\n• /prices — (admin) manage prices\n• /manage — (admin) manage requests\n• /addadmin <id> — (admin) add new admin\n• /removeadmin <id> — (owner only) remove admin\n• /listadmins — (admin) list all admins"
+    txt = "🆘 *Help*\n\n• /start — show main menu\n• /help — this screen\n• /cancel — cancel current flow\n• /id — show your Telegram ID\n• /admin — (admin only) stats\n• /broadcast <msg> — (admin)\n• /dump — (admin) dump JSON snapshot\n• /prices — (admin) manage prices\n• /manageorders — (admin) list and manage orders\n• /addadmin <id> — (admin) add new admin\n• /removeadmin <id> — (owner only) remove admin\n• /listadmins — (admin) list all admins"
     await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -459,8 +459,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
     
     # For admin commands, always reload data first
-    if text == "/manage":
+    if text == "/manageorders":
+        # Shortcut for admins via text command
         load_all()  # Force data reload
+        if is_owner(update):
+            await manage_orders_simple(update, context)
+            return
 
     if too_fast(uid):
         await update.message.reply_text("⏳ Chill a sec… processing.", reply_markup=MAIN_KB)
@@ -1860,6 +1864,32 @@ async def admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Error loading admin view. Please try again.", reply_markup=MAIN_KB)
 
 
+async def manage_orders_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simple /manageorders command: list all orders and provide instructions to change status."""
+    if not is_owner(update):
+        await update.message.reply_text("❌ Access denied.")
+        return
+
+    # Ensure freshest data
+    load_all()
+
+    if not orders:
+        await update.message.reply_text("📭 No orders available.")
+        return
+
+    # Build a concise list message
+    lines = ["📦 *Orders List*\n\n" ]
+    for oid, order in sorted(orders.items(), key=lambda x: x[1].timestamp, reverse=True):
+        user = order.name or safe_username(order.username)
+        item_name = order.item.replace('_', ' ').title() if hasattr(order, 'item') else 'N/A'
+        status = order.status.replace('_', ' ').title()
+        lines.append(f"• {oid} — {item_name} — {user} — {status}")
+
+    lines.append("\nTo change status: reply to the line above with `status <new_status>` (admins only). Example: `status delivered`")
+    text = "\n".join(lines)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+
 async def handle_manage_tips_input(update: Update, context: ContextTypes.DEFAULT_TYPE, state: Dict[str, Any]):
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
@@ -2256,7 +2286,9 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("dump", dump_json))
     app.add_handler(CommandHandler("prices", manage_prices))  # New admin price command
-    app.add_handler(CommandHandler("manage", admin_manage))
+    # Replace complex /manage with a simple orders list per request
+    app.add_handler(CommandHandler("manage", manage_orders_simple))
+    app.add_handler(CommandHandler("manageorders", manage_orders_simple))
     app.add_handler(CommandHandler("addadmin", add_admin))
     app.add_handler(CommandHandler("removeadmin", remove_admin))
     app.add_handler(CommandHandler("listadmins", list_admins))
