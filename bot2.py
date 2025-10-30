@@ -893,7 +893,7 @@ async def handle_update_profile_input(update: Update, context: ContextTypes.DEFA
         if text.lower() != "skip": profile.department = text
         state["step"] = "room"
         save_all()
-        await update.message.reply_text("🚪 Enter your Hall (or type `skip`):")
+        await update.message.reply_text("🚪 Enter your Hall  (or type `skip`):")
     elif step == "room":
         if text.lower() != "skip": profile.room = text
         state["step"] = "room_number"
