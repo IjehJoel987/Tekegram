@@ -21,7 +21,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 BOT_TOKEN = "8419540148:AAFecDSbpcxB2-cys1bhuCZWV2qrWxEPpRY"
-CLIENT_ID = 7160317469
+CLIENT_ID = 6340039582
 NIGERIA_TZ = timezone(timedelta(hours=1))
 DATA_FILE = "teeshoot_data.json"
 # Admin management
@@ -651,10 +651,31 @@ async def handle_purchase_input(update: Update, context: ContextTypes.DEFAULT_TY
         total = unit * qty
         o.details["total"] = total
         save_all()
-        user_profile = user_data_store.get(uid, UserProfile())
-        profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
         
-        await notify_admin(context, f"🛒 NEW ORDER\n\nOrder ID: {state['order_id']}\nItem: {o.details.get('custom_item', state['item']).replace('_', ' ').title()}\nModel: {o.details['model']}\nQuantity: {qty}\nTotal: {fmt_money(total)}\nAddress: {o.details['address']}\n⏰ Time of Order: {o.timestamp}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
+        user_profile = user_data_store.get(uid, UserProfile())
+        
+        # BUILD CUSTOMER INFO WITH USERNAME PROMINENT
+        customer_info = f"👤 CUSTOMER INFO:\n"
+        customer_info += f"📱 Telegram: @{o.username}\n" if o.username else "📱 Telegram: No username\n"
+        customer_info += f"🆔 User ID: {uid}\n"
+        customer_info += f"📛 Name: {user_profile.name or o.name or 'N/A'}\n"
+        customer_info += f"📞 Phone: {user_profile.phone or 'N/A'}\n"
+        customer_info += f"📧 Email: {user_profile.email or 'N/A'}\n"
+        customer_info += f"🏢 Department: {user_profile.department or 'N/A'}\n"
+        customer_info += f"🚪 Hall: {user_profile.room or 'N/A'}\n"
+        customer_info += f"🔢 Room Number: {user_profile.room_number or 'N/A'}"
+        
+        await notify_admin(context, 
+            f"🛒 NEW ORDER\n\n"
+            f"Order ID: {state['order_id']}\n"
+            f"Item: {o.details.get('custom_item', state['item']).replace('_', ' ').title()}\n"
+            f"Model: {o.details['model']}\n"
+            f"Quantity: {qty}\n"
+            f"Total: {fmt_money(total)}\n"
+            f"Address: {o.details['address']}\n"
+            f"⏰ Time: {o.timestamp}\n\n"
+            f"{customer_info}"
+        )
 
         confirm = (
             f"✅ **Order Summary**\n\n"
@@ -691,20 +712,42 @@ async def handle_callback_input(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     cbid = f"CB{_rand4()}"
-    callbacks[cbid] = CallbackReq(uid, update.effective_user.username, update.effective_user.first_name, text)
+    callbacks[cbid] = CallbackReq(
+        uid, 
+        update.effective_user.username, 
+        update.effective_user.first_name, 
+        text
+    )
     save_all()
 
-    await update.message.reply_text(f"📞 *Callback Request Submitted*\n\n📋 Request ID: `{cbid}`\n⏰ We'll call you back ASAP during business hours.\n\nThanks for rocking with OBLAK! 🙏🾾\n", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
+    await update.message.reply_text(
+        f"📞 *Callback Request Submitted*\n\n"
+        f"📋 Request ID: `{cbid}`\n"
+        f"⏰ We'll call you back ASAP during business hours.\n\n"
+        f"Thanks for rocking with OBLAK! 🙏🏾\n",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_KB
+    )
+    
+    # BUILD CUSTOMER INFO WITH USERNAME PROMINENT
     user_profile = user_data_store.get(uid, UserProfile())
-    user_info = f"{callbacks[cbid].name}"
-    if callbacks[cbid].username:
-        user_info += f" | @{callbacks[cbid].username}"
-    elif user_profile.phone:
-        user_info += f" | {user_profile.phone}"
-    else:
-        user_info += " | No contact info"
+    customer_info = f"👤 CUSTOMER INFO:\n"
+    customer_info += f"📱 Telegram: @{callbacks[cbid].username}\n" if callbacks[cbid].username else "📱 Telegram: No username\n"
+    customer_info += f"🆔 User ID: {uid}\n"
+    customer_info += f"📛 Name: {user_profile.name or callbacks[cbid].name or 'N/A'}\n"
+    customer_info += f"📞 Phone: {user_profile.phone or 'N/A'}\n"
+    customer_info += f"📧 Email: {user_profile.email or 'N/A'}\n"
+    customer_info += f"🏢 Department: {user_profile.department or 'N/A'}\n"
+    customer_info += f"🚪 Hall: {user_profile.room or 'N/A'}\n"
+    customer_info += f"🔢 Room Number: {user_profile.room_number or 'N/A'}"
 
-    await notify_admin(context, f"🚨 CALLBACK REQUEST\n\nID: {cbid}\nUser: {user_info}\nDetails: {text}")
+    await notify_admin(context, 
+        f"🚨 CALLBACK REQUEST\n\n"
+        f"ID: {cbid}\n"
+        f"Details: {text}\n\n"
+        f"{customer_info}"
+    )
+    
     user_states.pop(uid, None)
 
 # Simplified handlers for other features
@@ -735,21 +778,38 @@ async def handle_issue_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
             issue.details["description"] = text
             issue.status = "under_review"
             save_all()
-            await update.message.reply_text(f"🛠 *Issue Report Submitted*\n\n📋 Issue ID: `{state['issue_id']}`\n🔧 Type: {issue.type.title()}\n📱 Model: {issue.details.get('model','N/A')}\n📝 Description: {issue.details.get('description','N/A')}\n\n⏳ Status: Under Review\n", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)            # Send admin notification
+            
+            await update.message.reply_text(
+                f"🛠 *Issue Report Submitted*\n\n"
+                f"📋 Issue ID: `{state['issue_id']}`\n"
+                f"🔧 Type: {issue.type.title()}\n"
+                f"📱 Model: {issue.details.get('model','N/A')}\n"
+                f"📝 Description: {issue.details.get('description','N/A')}\n\n"
+                f"⏳ Status: Under Review\n",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=MAIN_KB
+            )
+            
+            # BUILD CUSTOMER INFO WITH USERNAME PROMINENT
             user_profile = user_data_store.get(uid, UserProfile())
-            user_info = f"{issue.name}"
-            if issue.username:
-                user_info += f" | @{issue.username}"
-            elif user_profile.phone:
-                user_info += f" | {user_profile.phone}"
-            else:
-                user_info += " | No contact info"
-
-            # Send admin notification with profile info
-            user_profile = user_data_store.get(uid, UserProfile())
-            profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
-
-            await notify_admin(context, f"🔧 NEW ISSUE REPORT\n\nIssue ID: {state['issue_id']}\nType: {issue.type.title()}\nModel: {issue.details.get('model', 'N/A')}\nDescription: {issue.details.get('description', 'N/A')}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
+            customer_info = f"👤 CUSTOMER INFO:\n"
+            customer_info += f"📱 Telegram: @{issue.username}\n" if issue.username else "📱 Telegram: No username\n"
+            customer_info += f"🆔 User ID: {uid}\n"
+            customer_info += f"📛 Name: {user_profile.name or issue.name or 'N/A'}\n"
+            customer_info += f"📞 Phone: {user_profile.phone or 'N/A'}\n"
+            customer_info += f"📧 Email: {user_profile.email or 'N/A'}\n"
+            customer_info += f"🏢 Department: {user_profile.department or 'N/A'}\n"
+            customer_info += f"🚪 Hall: {user_profile.room or 'N/A'}\n"
+            customer_info += f"🔢 Room Number: {user_profile.room_number or 'N/A'}"
+            
+            await notify_admin(context, 
+                f"🔧 NEW ISSUE REPORT\n\n"
+                f"Issue ID: {state['issue_id']}\n"
+                f"Type: {issue.type.title()}\n"
+                f"Model: {issue.details.get('model', 'N/A')}\n"
+                f"Description: {issue.details.get('description', 'N/A')}\n\n"
+                f"{customer_info}"
+            )
 
             # Send photos to admin if any were uploaded
             photos = issue.details.get("photos", [])
@@ -827,26 +887,46 @@ async def handle_inquiry_other_input(update: Update, context: ContextTypes.DEFAU
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
     inquiry_id = f"INQ{_rand4()}"
-    inquiries[inquiry_id] = Inquiry(uid, update.effective_user.username, update.effective_user.first_name or "User", "other", text)
+    inquiries[inquiry_id] = Inquiry(
+        uid, 
+        update.effective_user.username, 
+        update.effective_user.first_name or "User", 
+        "other", 
+        text
+    )
     save_all()
-    await update.message.reply_text(f"✅ *Inquiry Submitted*\n\n📋 Inquiry ID: `{inquiry_id}`\n📝 Your Question:\n{text}\n\n🧑‍🔧 We'll hit you back with a detailed answer.\n", parse_mode=ParseMode.MARKDOWN, reply_markup=MAIN_KB)
+    
+    await update.message.reply_text(
+        f"✅ *Inquiry Submitted*\n\n"
+        f"📋 Inquiry ID: `{inquiry_id}`\n"
+        f"📝 Your Question:\n{text}\n\n"
+        f"🧑‍🔧 We'll hit you back with a detailed answer.\n",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_KB
+    )
+    
+    # BUILD CUSTOMER INFO WITH USERNAME PROMINENT
     user_profile = user_data_store.get(uid, UserProfile())
-    user_info = f"{inquiries[inquiry_id].name}"
-    if inquiries[inquiry_id].username:
-        user_info += f" | @{inquiries[inquiry_id].username}"
-    elif user_profile.phone:
-        user_info += f" | {user_profile.phone}"
-    else:
-        user_info += " | No contact info"
-
-    # Send admin notification with profile info
-    user_profile = user_data_store.get(uid, UserProfile())
-    profile_info = f"📛 Name: {user_profile.name or 'N/A'}\n📱 Phone: {user_profile.phone or 'N/A'}\n📧 Email: {user_profile.email or 'N/A'}\n🏢 Department: {user_profile.department or 'N/A'}\n🚪 Room: {user_profile.room or 'N/A'}\n🔢 Room Number: {user_profile.room_number or 'N/A'}"
-
-    await notify_admin(context, f"📝 NEW INQUIRY\n\nInquiry ID: {inquiry_id}\nQuestion: {text}\n\n👤 CUSTOMER PROFILE:\n{profile_info}")
-
+    customer_info = f"👤 CUSTOMER INFO:\n"
+    customer_info += f"📱 Telegram: @{inquiries[inquiry_id].username}\n" if inquiries[inquiry_id].username else "📱 Telegram: No username\n"
+    customer_info += f"🆔 User ID: {uid}\n"
+    customer_info += f"📛 Name: {user_profile.name or inquiries[inquiry_id].name or 'N/A'}\n"
+    customer_info += f"📞 Phone: {user_profile.phone or 'N/A'}\n"
+    customer_info += f"📧 Email: {user_profile.email or 'N/A'}\n"
+    customer_info += f"🏢 Department: {user_profile.department or 'N/A'}\n"
+    customer_info += f"🚪 Hall: {user_profile.room or 'N/A'}\n"
+    customer_info += f"🔢 Room Number: {user_profile.room_number or 'N/A'}"
+    
+    await notify_admin(context, 
+        f"📝 NEW INQUIRY\n\n"
+        f"Inquiry ID: {inquiry_id}\n"
+        f"Question: {text}\n\n"
+        f"{customer_info}"
+    )
+    
     bump_user_req(uid, inquiry_id)
     user_states.pop(uid, None)
+
 
 # Profile management (simplified)
 async def handle_my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -893,7 +973,7 @@ async def handle_update_profile_input(update: Update, context: ContextTypes.DEFA
         if text.lower() != "skip": profile.department = text
         state["step"] = "room"
         save_all()
-        await update.message.reply_text("🚪 Enter your Hall  (or type `skip`):")
+        await update.message.reply_text("🚪 Enter your Hall (or type `skip`):")
     elif step == "room":
         if text.lower() != "skip": profile.room = text
         state["step"] = "room_number"
@@ -1568,6 +1648,7 @@ async def admin_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = f"📊 Teeshoot Bot Data Summary\n\n📦 Orders: {len(orders)}\n🛠 Issues: {len(issues)}\n📞 Callbacks: {len(callbacks)}\n❓ Inquiries: {len(inquiries)}\n👤 Users: {len(user_data_store)}\n\n📄 Active Sessions: {len(user_states)}"
     await update.message.reply_text(txt)
 
+# 5. UPDATED broadcast() function - Replace entire function:
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         await update.message.reply_text("❌ Access denied.")
@@ -1575,15 +1656,51 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /broadcast <message>")
         return
+    
     msg = " ".join(context.args)
+    sender_name = update.effective_user.first_name or "Admin"
+    sender_username = update.effective_user.username
+    sender_id = update.effective_user.id
+    
+    # First, notify all OTHER admins about the broadcast
+    admin_notification = (
+        f"📢 *BROADCAST ALERT*\n\n"
+        f"👤 Sent by: {sender_name}"
+        f"{f' (@{sender_username})' if sender_username else ''}\n"
+        f"🆔 Admin ID: {sender_id}\n\n"
+        f"📝 Message being sent:\n{msg}\n\n"
+        f"⚠️ Don't duplicate this broadcast!"
+    )
+    
+    for admin_id in ADMIN_IDS:
+        if admin_id != sender_id:  # Don't notify the sender
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id, 
+                    text=admin_notification, 
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify admin {admin_id}: {e}")
+    
+    # Now send the actual broadcast to users
     sent = 0
     for uid, profile in user_data_store.items():
         if profile.notifications_enabled:
             try:
-                await context.bot.send_message(chat_id=uid, text=f"📣 *Broadcast*\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
+                await context.bot.send_message(
+                    chat_id=uid, 
+                    text=f"📣 *Broadcast*\n\n{msg}", 
+                    parse_mode=ParseMode.MARKDOWN
+                )
                 sent += 1
-            except: pass
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
+            except: 
+                pass
+    
+    await update.message.reply_text(
+        f"✅ Broadcast sent to {sent} users.\n"
+        f"📢 All other admins have been notified."
+    )
 
 async def dump_json(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
